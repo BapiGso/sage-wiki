@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -192,6 +193,15 @@ func (e *APIEmbedder) Dimensions() int { return e.dims }
 const maxEmbedChars = 5000
 
 func (e *APIEmbedder) Embed(text string) ([]float32, error) {
+	// Defense-in-depth: empty or whitespace-only input is rejected by some
+	// OpenAI-compatible embedding endpoints — bge-m3 returns HTTP 400 (code
+	// 20015) for "" and newline-only input. The chunker (internal/extract) is
+	// the root-cause owner of not producing such chunks; this guards every
+	// other caller too. Fail loud: a post-chunker empty input signals an
+	// upstream bug, not something to silently paper over with a zero vector.
+	if strings.TrimSpace(text) == "" {
+		return nil, fmt.Errorf("embed: empty or whitespace-only input text")
+	}
 	if e.limiter != nil {
 		e.limiter.wait()
 	}
@@ -220,8 +230,15 @@ func (e *APIEmbedder) embedOpenAILong(runes []rune) ([]float32, error) {
 		if end > len(runes) {
 			end = len(runes)
 		}
+		seg := string(runes[i:end])
+		// A rune-aligned chunk boundary can land inside a run of whitespace (e.g.
+		// blank lines between sections), producing an all-whitespace chunk that
+		// adds nothing to the mean pool and would 400 on bge-m3. Skip it.
+		if strings.TrimSpace(seg) == "" {
+			continue
+		}
 		vec, err := retryableEmbed(func() ([]float32, error) {
-			return e.embedOpenAI(string(runes[i:end]))
+			return e.embedOpenAI(seg)
 		})
 		if err != nil {
 			return nil, fmt.Errorf("embed: chunk %d/%d: %w", chunks+1, (len(runes)+maxEmbedChars-1)/maxEmbedChars, err)
