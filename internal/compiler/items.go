@@ -90,9 +90,23 @@ func (s *CompileItemStore) Upsert(item CompileItem) error {
 			ON CONFLICT(source_path) DO UPDATE SET
 				hash=excluded.hash, file_type=excluded.file_type, size_bytes=excluded.size_bytes,
 				tier=excluded.tier, tier_default=excluded.tier_default, tier_override=excluded.tier_override,
-				pass_indexed=excluded.pass_indexed, pass_embedded=excluded.pass_embedded,
-				pass_parsed=excluded.pass_parsed, pass_summarized=excluded.pass_summarized,
-				pass_extracted=excluded.pass_extracted, pass_written=excluded.pass_written,
+				-- Sticky pass flags: preserve an existing pass=1 when the hash is
+				-- unchanged so an interrupted compile can resume without redoing
+				-- completed tiers (issue #88). When the hash differs, the file was
+				-- modified and the row's flags are taken from excluded (zeroed by
+				-- the caller in pipeline.go) so the source is re-processed.
+				pass_indexed=CASE WHEN compile_items.hash = excluded.hash AND compile_items.pass_indexed = 1
+					THEN 1 ELSE excluded.pass_indexed END,
+				pass_embedded=CASE WHEN compile_items.hash = excluded.hash AND compile_items.pass_embedded = 1
+					THEN 1 ELSE excluded.pass_embedded END,
+				pass_parsed=CASE WHEN compile_items.hash = excluded.hash AND compile_items.pass_parsed = 1
+					THEN 1 ELSE excluded.pass_parsed END,
+				pass_summarized=CASE WHEN compile_items.hash = excluded.hash AND compile_items.pass_summarized = 1
+					THEN 1 ELSE excluded.pass_summarized END,
+				pass_extracted=CASE WHEN compile_items.hash = excluded.hash AND compile_items.pass_extracted = 1
+					THEN 1 ELSE excluded.pass_extracted END,
+				pass_written=CASE WHEN compile_items.hash = excluded.hash AND compile_items.pass_written = 1
+					THEN 1 ELSE excluded.pass_written END,
 				compile_id=excluded.compile_id, error=excluded.error, error_count=excluded.error_count,
 				summary_path=excluded.summary_path, source_type=excluded.source_type,
 				quality_score=excluded.quality_score, updated_at=datetime('now')

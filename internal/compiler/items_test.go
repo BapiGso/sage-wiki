@@ -388,3 +388,119 @@ func TestCompileItemStore_DeleteByPaths_MultiplePaths(t *testing.T) {
 		}
 	}
 }
+
+// TestUpsert_PreservesPassFlags_WhenHashUnchanged verifies that an interrupted
+// compile can resume without redoing completed tiers. When the next compile
+// re-runs Diff() and calls Upsert with zeroed pass flags (the bare struct
+// constructed at pipeline.go:262), the existing pass flags must be preserved
+// as long as the hash hasn't changed. Issue #88.
+func TestUpsert_PreservesPassFlags_WhenHashUnchanged(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+	store := NewCompileItemStore(db)
+
+	// Simulate a previous compile that completed tier 0 + tier 1
+	if err := store.Upsert(CompileItem{
+		SourcePath:   "raw/docs/test.md",
+		Hash:         "sha256:abc",
+		FileType:     "article",
+		Tier:         1,
+		PassIndexed:  true,
+		PassEmbedded: true,
+	}); err != nil {
+		t.Fatalf("seed upsert: %v", err)
+	}
+
+	// Simulate next compile after interrupt: Diff re-sees the source as
+	// "added" and the caller constructs a bare CompileItem with zero pass flags.
+	// Same hash → pass flags must be preserved.
+	if err := store.Upsert(CompileItem{
+		SourcePath: "raw/docs/test.md",
+		Hash:       "sha256:abc",
+		FileType:   "article",
+		Tier:       1,
+		// PassIndexed and PassEmbedded NOT set → both false
+	}); err != nil {
+		t.Fatalf("resume upsert: %v", err)
+	}
+
+	got, err := store.GetByPath("raw/docs/test.md")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !got.PassIndexed {
+		t.Error("pass_indexed should be preserved across resume with same hash")
+	}
+	if !got.PassEmbedded {
+		t.Error("pass_embedded should be preserved across resume with same hash")
+	}
+}
+
+// TestUpsert_ResetsPassFlags_WhenHashChanged verifies that a modified source
+// (different hash) correctly re-processes through every pass — the sticky
+// pass flag behavior must NOT mask genuine file changes.
+func TestUpsert_ResetsPassFlags_WhenHashChanged(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+	store := NewCompileItemStore(db)
+
+	if err := store.Upsert(CompileItem{
+		SourcePath:     "raw/docs/test.md",
+		Hash:           "sha256:original",
+		FileType:       "article",
+		Tier:           3,
+		PassIndexed:    true,
+		PassEmbedded:   true,
+		PassSummarized: true,
+		PassExtracted:  true,
+		PassWritten:    true,
+	}); err != nil {
+		t.Fatalf("seed upsert: %v", err)
+	}
+
+	// User edits the file → hash changes; caller passes zero pass flags so
+	// all passes are re-run from scratch.
+	if err := store.Upsert(CompileItem{
+		SourcePath: "raw/docs/test.md",
+		Hash:       "sha256:modified",
+		FileType:   "article",
+		Tier:       3,
+	}); err != nil {
+		t.Fatalf("modified upsert: %v", err)
+	}
+
+	got, _ := store.GetByPath("raw/docs/test.md")
+	if got.Hash != "sha256:modified" {
+		t.Errorf("hash = %q, want updated hash", got.Hash)
+	}
+	if got.PassIndexed || got.PassEmbedded || got.PassSummarized || got.PassExtracted || got.PassWritten {
+		t.Errorf("all pass flags should reset when hash changes; got indexed=%v embedded=%v summarized=%v extracted=%v written=%v",
+			got.PassIndexed, got.PassEmbedded, got.PassSummarized, got.PassExtracted, got.PassWritten)
+	}
+}
+
+// TestUpsert_NewRowGetsPassFlagsFromValues verifies the INSERT path (no
+// existing row): pass flags come straight from the inserted values.
+func TestUpsert_NewRowGetsPassFlagsFromValues(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+	store := NewCompileItemStore(db)
+
+	if err := store.Upsert(CompileItem{
+		SourcePath:  "raw/docs/new.md",
+		Hash:        "sha256:fresh",
+		FileType:    "article",
+		Tier:        1,
+		PassIndexed: true,
+	}); err != nil {
+		t.Fatalf("insert upsert: %v", err)
+	}
+
+	got, _ := store.GetByPath("raw/docs/new.md")
+	if !got.PassIndexed {
+		t.Error("INSERT path: pass_indexed should reflect inserted value")
+	}
+	if got.PassEmbedded {
+		t.Error("INSERT path: pass_embedded should be false (not set in insert)")
+	}
+}
