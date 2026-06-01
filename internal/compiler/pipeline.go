@@ -1,6 +1,8 @@
 package compiler
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -68,6 +70,24 @@ type BatchState struct {
 	Pass       string `json:"pass"`        // which compiler pass (summarize, extract)
 	ResultsRef string `json:"results_ref"` // Anthropic: results URL; OpenAI: output_file_id
 	SubmittedAt string `json:"submitted_at"`
+
+	// PathByID maps a wire-level custom_id (a short hash of the source path)
+	// back to the original source path. The wire ID is required to stay short
+	// because some providers (Zhipu GLM) cap custom_id at 64 chars while OpenAI
+	// and Anthropic allow long IDs. Populated by submitBatch, consumed by
+	// resumeBatch. Empty for legacy checkpoints written before this fix —
+	// resumeBatch then falls back to treating custom_id as the literal path.
+	// Issue #89.
+	PathByID map[string]string `json:"path_by_id,omitempty"`
+}
+
+// batchIDForPath produces a short stable custom_id for a source path that
+// fits within every provider's custom_id length limit (Zhipu GLM caps it at
+// 64 chars; OpenAI and Anthropic are more permissive). 16 hex chars (64 bits
+// of SHA-256) gives birthday-paradox-safe uniqueness up to ~4B entries.
+func batchIDForPath(path string) string {
+	sum := sha256.Sum256([]byte(path))
+	return hex.EncodeToString(sum[:8])
 }
 
 type FailedSource struct {
@@ -529,8 +549,11 @@ func submitBatch(
 		}
 	}
 
-	// Build batch requests — extract content and render prompts
+	// Build batch requests — extract content and render prompts.
+	// pathByID maps each wire-level custom_id (a hash of the path) back to
+	// the source path; persisted in BatchState for resumeBatch (issue #89).
 	var requests []llm.BatchRequest
+	pathByID := make(map[string]string)
 	for _, src := range toProcess {
 		absPath := filepath.Join(projectDir, src.Path)
 		content, err := extract.Extract(absPath, src.Type, batchExOpts...)
@@ -568,8 +591,10 @@ func submitBatch(
 			continue
 		}
 
+		customID := batchIDForPath(src.Path)
+		pathByID[customID] = src.Path
 		requests = append(requests, llm.BatchRequest{
-			CustomID: src.Path,
+			CustomID: customID,
 			Messages: []llm.Message{
 				{Role: "system", Content: "You are a research assistant creating structured summaries for a personal knowledge wiki."},
 				{Role: "user", Content: prompt + "\n\n---\n\nSource content:\n\n" + content.Text},
@@ -589,10 +614,11 @@ func submitBatch(
 		return nil, fmt.Errorf("compile: submit batch: %w", err)
 	}
 
-	// Build pending list
-	var pending []string
-	for _, r := range requests {
-		pending = append(pending, r.CustomID)
+	// Pending list holds source PATHS (used by non-batch resume logic too) —
+	// the wire-level IDs are kept in BatchState.PathByID below.
+	pending := make([]string, 0, len(pathByID))
+	for _, path := range pathByID {
+		pending = append(pending, path)
 	}
 
 	// Save checkpoint
@@ -607,6 +633,7 @@ func submitBatch(
 			Provider:    client.ProviderName(),
 			Pass:        "summarize",
 			SubmittedAt: utcNow,
+			PathByID:    pathByID,
 		},
 	}
 	if err := saveCompileState(statePath, state); err != nil {
@@ -707,17 +734,31 @@ func resumeBatch(
 	var successfulSummaries []SummaryResult
 
 	for _, br := range batchResults {
-		// Validate CustomID matches a known pending source
-		if !pendingSet[br.CustomID] {
-			log.Warn("batch: ignoring unknown custom_id from batch results", "id", br.CustomID)
+		// Translate the wire-level custom_id back to the source path. New
+		// batches (post-fix) populate bs.PathByID; legacy checkpoints written
+		// before this fix have an empty map, in which case the custom_id IS
+		// the path and we use it directly. Issue #89.
+		path := br.CustomID
+		if bs.PathByID != nil {
+			if mapped, ok := bs.PathByID[br.CustomID]; ok {
+				path = mapped
+			} else {
+				log.Warn("batch: unknown custom_id (no path mapping)", "id", br.CustomID)
+				continue
+			}
+		}
+
+		// Validate path matches a known pending source
+		if !pendingSet[path] {
+			log.Warn("batch: ignoring unknown source from batch results", "id", br.CustomID, "path", path)
 			continue
 		}
 
 		if br.Error != "" {
 			result.Errors++
-			progress.ItemError(br.CustomID, fmt.Errorf("%s", br.Error))
+			progress.ItemError(path, fmt.Errorf("%s", br.Error))
 			state.Failed = append(state.Failed, FailedSource{
-				Path:  br.CustomID,
+				Path:  path,
 				Error: br.Error,
 			})
 			continue
@@ -730,38 +771,38 @@ func resumeBatch(
 
 		// Write summary file
 		summaryText := br.Response.Content
-		baseName := strings.TrimSuffix(filepath.Base(br.CustomID), filepath.Ext(br.CustomID))
+		baseName := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 		summaryDir := filepath.Join(projectDir, cfg.Output, "summaries")
 		os.MkdirAll(summaryDir, 0755)
 		summaryPath := filepath.Join(cfg.Output, "summaries", baseName+".md")
 		absOutputPath := filepath.Join(projectDir, summaryPath)
 
-		frontmatter := fmt.Sprintf("---\nsource: %s\ncompiled_at: %s\nbatch: true\n---\n\n", br.CustomID, timeNow(cfg.Compiler.UserTimeLocation()))
+		frontmatter := fmt.Sprintf("---\nsource: %s\ncompiled_at: %s\nbatch: true\n---\n\n", path, timeNow(cfg.Compiler.UserTimeLocation()))
 		if err := os.WriteFile(absOutputPath, []byte(frontmatter+summaryText), 0644); err != nil {
 			result.Errors++
-			progress.ItemError(br.CustomID, err)
+			progress.ItemError(path, err)
 			continue
 		}
 
 		result.Summarized++
-		progress.ItemDone(br.CustomID, summaryPath)
+		progress.ItemDone(path, summaryPath)
 
 		// Update manifest — ensure source entry exists with current resolved type,
 		// then mark compiled. Refreshing Type on existing entries propagates
 		// config-driven type changes on recompile.
-		resolvedType := TypeForFile(projectDir, br.CustomID, cfg)
-		if _, exists := mf.Sources[br.CustomID]; !exists {
-			mf.AddSource(br.CustomID, "", resolvedType, 0)
+		resolvedType := TypeForFile(projectDir, path, cfg)
+		if _, exists := mf.Sources[path]; !exists {
+			mf.AddSource(path, "", resolvedType, 0)
 		} else {
-			src := mf.Sources[br.CustomID]
+			src := mf.Sources[path]
 			src.Type = resolvedType
-			mf.Sources[br.CustomID] = src
+			mf.Sources[path] = src
 		}
-		mf.MarkCompiled(br.CustomID, summaryPath, nil)
+		mf.MarkCompiled(path, summaryPath, nil)
 
 		// Index
 		memStore.Add(memory.Entry{
-			ID:          br.CustomID,
+			ID:          path,
 			Content:     summaryText,
 			Tags:        []string{resolvedType},
 			ArticlePath: summaryPath,
@@ -770,21 +811,21 @@ func resumeBatch(
 		if embedder != nil {
 			vec, err := embedder.Embed(summaryText)
 			if err != nil {
-				log.Warn("embedding failed", "source", br.CustomID, "error", err)
+				log.Warn("embedding failed", "source", path, "error", err)
 			} else {
-				vecStore.Upsert(br.CustomID, vec)
+				vecStore.Upsert(path, vec)
 			}
 		}
 
 		// Track for concept extraction
 		successfulSummaries = append(successfulSummaries, SummaryResult{
-			SourcePath:  br.CustomID,
+			SourcePath:  path,
 			SummaryPath: summaryPath,
 			Summary:     summaryText,
 		})
 
-		removeFromPending(state, br.CustomID)
-		state.Completed = append(state.Completed, br.CustomID)
+		removeFromPending(state, path)
+		state.Completed = append(state.Completed, path)
 	}
 	progress.EndPhase()
 
