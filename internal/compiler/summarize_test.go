@@ -29,7 +29,9 @@ func TestSummarizeOneReusesExistingSummaryOnHashMatch(t *testing.T) {
 	sourceHash := "sha256:abc123"
 	longBody := strings.Repeat("x", 120)
 
-	buildSummaryFile(t, filepath.Join(projectDir, outputDir), "doc", sourceHash, longBody)
+	// SummaryFilename("sources/doc.md") is "sources-doc.md" with the
+	// path-segment-joined naming (#51).
+	buildSummaryFile(t, filepath.Join(projectDir, outputDir), "sources-doc", sourceHash, longBody)
 
 	info := SourceInfo{Path: "sources/doc.md", Hash: sourceHash, Type: "article"}
 	result := summarizeOne(projectDir, outputDir, info, nil, "", 0, nil, "")
@@ -40,7 +42,7 @@ func TestSummarizeOneReusesExistingSummaryOnHashMatch(t *testing.T) {
 	if result.Summary != longBody {
 		t.Errorf("expected reused summary body, got %q", result.Summary)
 	}
-	if result.SummaryPath != filepath.Join(outputDir, "summaries", "doc.md") {
+	if result.SummaryPath != filepath.Join(outputDir, "summaries", "sources-doc.md") {
 		t.Errorf("unexpected SummaryPath: %q", result.SummaryPath)
 	}
 }

@@ -41,8 +41,11 @@ func TestWriteSummary(t *testing.T) {
 		t.Fatalf("error: %s", result.Content[0].(mcplib.TextContent).Text)
 	}
 
-	// Verify file written
-	summaryPath := filepath.Join(dir, "wiki", "summaries", "test.md")
+	// Verify file written. With the path-segment-joined SummaryFilename
+	// algorithm (#51), "raw/test.md" produces "raw-test.md" — every segment
+	// is preserved so different directories with the same basename can't
+	// collide.
+	summaryPath := filepath.Join(dir, "wiki", "summaries", "raw-test.md")
 	if _, err := os.Stat(summaryPath); os.IsNotExist(err) {
 		t.Error("summary file should exist")
 	}

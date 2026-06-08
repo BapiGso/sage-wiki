@@ -778,10 +778,9 @@ func resumeBatch(
 
 		// Write summary file
 		summaryText := br.Response.Content
-		baseName := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 		summaryDir := filepath.Join(projectDir, cfg.Output, "summaries")
 		os.MkdirAll(summaryDir, 0755)
-		summaryPath := filepath.Join(cfg.Output, "summaries", baseName+".md")
+		summaryPath := filepath.Join(cfg.Output, "summaries", SummaryFilename(path))
 		absOutputPath := filepath.Join(projectDir, summaryPath)
 
 		frontmatter := fmt.Sprintf("---\nsource: %s\ncompiled_at: %s\nbatch: true\n---\n\n", path, timeNow(cfg.Compiler.UserTimeLocation()))

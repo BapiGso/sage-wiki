@@ -143,8 +143,7 @@ func summarizeOne(
 	// source hash. Restores resume-from-checkpoint behavior when compile-state.json is
 	// missing (e.g. a prior failed run cleared it). The source_hash field in the
 	// frontmatter guards against serving stale summaries for modified sources.
-	baseName := strings.TrimSuffix(filepath.Base(info.Path), filepath.Ext(info.Path))
-	summaryPath := filepath.Join(outputDir, "summaries", baseName+".md")
+	summaryPath := filepath.Join(outputDir, "summaries", SummaryFilename(info.Path))
 	absSummary := filepath.Join(projectDir, summaryPath)
 	if existing, err := os.ReadFile(absSummary); err == nil {
 		body := string(existing)
@@ -266,8 +265,7 @@ func writeSummaryFile(projectDir, outputDir string, info SourceInfo, content *ex
 	summaryDir := filepath.Join(projectDir, outputDir, "summaries")
 	os.MkdirAll(summaryDir, 0755)
 
-	baseName := strings.TrimSuffix(filepath.Base(info.Path), filepath.Ext(info.Path))
-	summaryPath := filepath.Join(outputDir, "summaries", baseName+".md")
+	summaryPath := filepath.Join(outputDir, "summaries", SummaryFilename(info.Path))
 	absOutputPath := filepath.Join(projectDir, summaryPath)
 
 	frontmatter := fmt.Sprintf(`---
