@@ -63,6 +63,58 @@ func TestRefreshPKCEToken(t *testing.T) {
 	}
 }
 
+// TestRefreshPKCETokenJSON pins the Anthropic refresh request shape: when
+// TokenRequestFormat == "json" the refresh body must be application/json too,
+// otherwise login succeeds but the first refresh (~hours later) fails with the
+// same "Invalid request format" and silently logs the user out.
+func TestRefreshPKCETokenJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+			t.Errorf("Content-Type = %q, want application/json", ct)
+		}
+		var body map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("request body is not valid JSON: %v", err)
+		}
+		if got, _ := body["grant_type"].(string); got != "refresh_token" {
+			t.Errorf("grant_type = %q", got)
+		}
+		if got, _ := body["refresh_token"].(string); got != "rt-old" {
+			t.Errorf("refresh_token = %q", got)
+		}
+		if got, _ := body["client_id"].(string); got != "anthropic-client" {
+			t.Errorf("client_id = %q", got)
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"access_token":  "at-refreshed",
+			"refresh_token": "rt-new",
+			"expires_in":    7200,
+		})
+	}))
+	defer server.Close()
+
+	origCfg := Providers["anthropic"]
+	Providers["anthropic"] = ProviderConfig{
+		TokenURL:           server.URL,
+		ClientID:           "anthropic-client",
+		FlowType:           FlowPKCE,
+		TokenRequestFormat: "json",
+	}
+	defer func() { Providers["anthropic"] = origCfg }()
+
+	cred := &Credential{AccessToken: "at-old", RefreshToken: "rt-old", Source: "login"}
+	refreshed, err := Refresh("anthropic", cred)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.AccessToken != "at-refreshed" {
+		t.Errorf("AccessToken = %q", refreshed.AccessToken)
+	}
+	if refreshed.RefreshToken != "rt-new" {
+		t.Errorf("RefreshToken = %q", refreshed.RefreshToken)
+	}
+}
+
 func TestRefreshPreservesRefreshTokenWhenNotReturned(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{

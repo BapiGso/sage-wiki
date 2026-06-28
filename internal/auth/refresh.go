@@ -33,13 +33,19 @@ func Refresh(providerName string, cred *Credential) (*Credential, error) {
 }
 
 func refreshPKCEToken(cfg ProviderConfig, cred *Credential) (*Credential, error) {
-	data := url.Values{
-		"grant_type":    {"refresh_token"},
-		"client_id":     {cfg.ClientID},
-		"refresh_token": {cred.RefreshToken},
+	// Same per-provider body encoding as the code exchange: Anthropic's token
+	// endpoint requires JSON for refresh too, so a form-encoded refresh would
+	// fail (~hours after login) with the same "Invalid request format".
+	reqBody, contentType, err := buildTokenRequest(cfg.TokenRequestFormat, map[string]string{
+		"grant_type":    "refresh_token",
+		"client_id":     cfg.ClientID,
+		"refresh_token": cred.RefreshToken,
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	resp, err := http.Post(cfg.TokenURL, "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
+	resp, err := http.Post(cfg.TokenURL, contentType, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("auth: refresh request: %w", err)
 	}

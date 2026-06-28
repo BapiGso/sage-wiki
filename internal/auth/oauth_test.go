@@ -137,6 +137,17 @@ func TestExchangeCodeForTokens(t *testing.T) {
 		if r.Form.Get("code_verifier") != "my-verifier" {
 			t.Errorf("code_verifier = %q", r.Form.Get("code_verifier"))
 		}
+		// Defense-in-depth: the OpenAI form body must carry client_id + redirect_uri
+		// and must NOT gain `state` (that field is JSON/anthropic-only).
+		if r.Form.Get("client_id") != "client-id" {
+			t.Errorf("client_id = %q", r.Form.Get("client_id"))
+		}
+		if r.Form.Get("redirect_uri") != "http://localhost:1234/callback" {
+			t.Errorf("redirect_uri = %q", r.Form.Get("redirect_uri"))
+		}
+		if r.Form.Has("state") {
+			t.Errorf("form body must not include state, got %q", r.Form.Get("state"))
+		}
 
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"access_token":  "at-new-token",
@@ -146,7 +157,8 @@ func TestExchangeCodeForTokens(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tok, err := exchangeCodeForTokens(server.URL, "auth-code-123", "my-verifier", "client-id", "http://localhost:1234/callback")
+	cfg := ProviderConfig{TokenURL: server.URL, ClientID: "client-id"} // default: form
+	tok, err := exchangeCodeForTokens(cfg, "auth-code-123", "test-state", "my-verifier", "http://localhost:1234/callback")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,6 +170,66 @@ func TestExchangeCodeForTokens(t *testing.T) {
 	}
 	if tok.ExpiresAt <= time.Now().Unix() {
 		t.Error("ExpiresAt should be in the future")
+	}
+}
+
+// TestExchangeCodeForTokensJSON pins the Anthropic token-exchange request shape:
+// when TokenRequestFormat == "json", the body must be application/json (a
+// form-encoded body is rejected by /v1/oauth/token with 400 "Invalid request
+// format") and must echo the PKCE state. This is the reproducing test for the
+// VPS login bug.
+func TestExchangeCodeForTokensJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+			t.Errorf("Content-Type = %q, want application/json", ct)
+		}
+		var body map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("request body is not valid JSON: %v", err)
+		}
+		for k, want := range map[string]string{
+			"grant_type":    "authorization_code",
+			"code":          "auth-code-123",
+			"state":         "the-state",
+			"code_verifier": "my-verifier",
+			"client_id":     "anthropic-client",
+			"redirect_uri":  "http://localhost:53692/callback",
+		} {
+			if got, _ := body[k].(string); got != want {
+				t.Errorf("body[%q] = %q, want %q", k, got, want)
+			}
+		}
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"access_token":  "at-json",
+			"refresh_token": "rt-json",
+			"expires_in":    3600,
+		})
+	}))
+	defer server.Close()
+
+	cfg := ProviderConfig{TokenURL: server.URL, ClientID: "anthropic-client", TokenRequestFormat: "json"}
+	tok, err := exchangeCodeForTokens(cfg, "auth-code-123", "the-state", "my-verifier", "http://localhost:53692/callback")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok.AccessToken != "at-json" {
+		t.Errorf("AccessToken = %q", tok.AccessToken)
+	}
+	if tok.RefreshToken != "rt-json" {
+		t.Errorf("RefreshToken = %q", tok.RefreshToken)
+	}
+}
+
+// TestAnthropicTokenFormatWired guards the production wiring: the synthetic-cfg
+// tests above would stay green even if the real anthropic provider lost its
+// "json" format, silently reshipping the bug. This asserts the actual config.
+func TestAnthropicTokenFormatWired(t *testing.T) {
+	if got := Providers["anthropic"].TokenRequestFormat; got != "json" {
+		t.Errorf("Providers[\"anthropic\"].TokenRequestFormat = %q, want \"json\"", got)
+	}
+	if got := Providers["openai"].TokenRequestFormat; got != "" {
+		t.Errorf("Providers[\"openai\"].TokenRequestFormat = %q, want \"\" (form)", got)
 	}
 }
 

@@ -79,4 +79,10 @@ type ProviderConfig struct {
 	FlowType        FlowType
 	ImportPath      string
 	AccountIDClaim  string
+	// TokenRequestFormat selects how the token endpoint (exchange + refresh)
+	// request body is encoded: "" / "form" = application/x-www-form-urlencoded
+	// (standard OAuth 2.0, used by OpenAI); "json" = application/json, which
+	// Anthropic's /v1/oauth/token requires — a form body there is rejected with
+	// HTTP 400 invalid_request_error "Invalid request format".
+	TokenRequestFormat string
 }
