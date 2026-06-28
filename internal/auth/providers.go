@@ -26,6 +26,10 @@ var Providers = map[string]ProviderConfig{
 		Scopes:       []string{"user:inference"},
 		FlowType:     FlowPKCE,
 		ImportPath:   "~/.claude/.credentials.json",
+		// Anthropic's /v1/oauth/token requires a JSON request body for both the
+		// code exchange and refresh; a form body returns 400 "Invalid request
+		// format". OpenAI uses the default form encoding.
+		TokenRequestFormat: "json",
 	},
 	"github-copilot": {
 		FlowType:   FlowImportOnly,

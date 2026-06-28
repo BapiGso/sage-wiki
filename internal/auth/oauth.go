@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -74,16 +75,48 @@ type tokenResponse struct {
 	ExpiresIn    int    `json:"expires_in"`
 }
 
-func exchangeCodeForTokens(tokenURL, code, verifier, clientID, redirectURI string) (*Credential, error) {
-	data := url.Values{
-		"grant_type":    {"authorization_code"},
-		"code":          {code},
-		"code_verifier": {verifier},
-		"client_id":     {clientID},
-		"redirect_uri":  {redirectURI},
+// buildTokenRequest serializes token-endpoint parameters as either a
+// form-encoded body (standard OAuth 2.0, used by OpenAI) or a JSON body
+// (required by Anthropic's /v1/oauth/token — a form body there is rejected with
+// 400 invalid_request_error "Invalid request format"). It returns the body
+// reader and the matching Content-Type.
+func buildTokenRequest(format string, fields map[string]string) (io.Reader, string, error) {
+	if format == "json" {
+		b, err := json.Marshal(fields)
+		if err != nil {
+			return nil, "", fmt.Errorf("auth: marshal token request: %w", err)
+		}
+		return bytes.NewReader(b), "application/json", nil
+	}
+	data := url.Values{}
+	for k, v := range fields {
+		data.Set(k, v)
+	}
+	return strings.NewReader(data.Encode()), "application/x-www-form-urlencoded", nil
+}
+
+func exchangeCodeForTokens(cfg ProviderConfig, code, state, verifier, redirectURI string) (*Credential, error) {
+	fields := map[string]string{
+		"grant_type":    "authorization_code",
+		"code":          code,
+		"code_verifier": verifier,
+		"client_id":     cfg.ClientID,
+		"redirect_uri":  redirectURI,
+	}
+	// Anthropic's token endpoint expects the PKCE `state` echoed in the exchange
+	// body (the reference Claude OAuth client sends it). The standard OAuth form
+	// flow (OpenAI) omits it, so add `state` only on the JSON path — this keeps
+	// the form body byte-for-byte identical to the proven OpenAI request.
+	if cfg.TokenRequestFormat == "json" {
+		fields["state"] = state
 	}
 
-	resp, err := http.Post(tokenURL, "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
+	reqBody, contentType, err := buildTokenRequest(cfg.TokenRequestFormat, fields)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := http.Post(cfg.TokenURL, contentType, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("auth: token exchange: %w", err)
 	}
@@ -259,7 +292,7 @@ func LoginPKCE(providerName string, store *Store, cb LoginCallbacks) error {
 		return fmt.Errorf("auth: state mismatch (possible CSRF attack)")
 	}
 
-	cred, err := exchangeCodeForTokens(cfg.TokenURL, cbResult.code, verifier, cfg.ClientID, redirectURI)
+	cred, err := exchangeCodeForTokens(cfg, cbResult.code, cbResult.state, verifier, redirectURI)
 	if err != nil {
 		return err
 	}
