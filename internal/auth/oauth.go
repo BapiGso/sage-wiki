@@ -161,11 +161,27 @@ func buildAuthorizeURL(cfg ProviderConfig, challenge, state string, port int) st
 	return u.String()
 }
 
+// openBrowserFn launches the system browser. Indirected through a variable so
+// tests can stub it (and so they never spawn a real browser).
+var openBrowserFn = openBrowser
+
+// loginTimeout bounds how long LoginPKCE waits for the authorization to
+// complete (via the local callback server or a pasted redirect URL). Generous
+// enough for the headless flow: copy the URL, open it on another machine,
+// authorize, then paste the redirect URL back.
+const loginTimeout = 5 * time.Minute
+
 // LoginCallbacks allows the CLI layer to control UI interactions.
 type LoginCallbacks struct {
-	OnBrowserOpen func(url string)
-	OnManualURL   func(authorizeURL string) string // returns pasted redirect URL
-	OnSuccess     func(provider string)
+	// OnPrompt is called once with the authorization URL and whether a browser
+	// was launched. The CLI ALWAYS displays the URL so the user can open it
+	// manually (e.g. on a headless/remote server where no browser is present).
+	OnPrompt func(authorizeURL string, browserOpened bool)
+	// OnManualURL blocks reading a pasted redirect URL from the user and
+	// returns it (empty string if none). It runs concurrently with the local
+	// callback server so either path can complete the flow.
+	OnManualURL func(authorizeURL string) string
+	OnSuccess   func(provider string)
 }
 
 // LoginPKCE performs the full PKCE OAuth flow for a provider.
@@ -198,29 +214,42 @@ func LoginPKCE(providerName string, store *Store, cb LoginCallbacks) error {
 	authorizeURL := buildAuthorizeURL(cfg, challenge, state, port)
 	redirectURI := fmt.Sprintf("http://localhost:%d%s", port, cfg.RedirectPath)
 
-	var cbResult callbackResult
+	// Attempt to open a browser, but never rely on it: openBrowser returns nil
+	// as soon as the launcher process starts (e.g. xdg-open on a headless box),
+	// which tells us nothing about whether a browser actually appeared. So we
+	// always show the URL and accept the redirect via EITHER the local callback
+	// server (browser on this machine) OR a manually-pasted redirect URL
+	// (browser on another machine — headless/remote server). First one wins.
+	browserOpened := openBrowserFn(authorizeURL) == nil
 
-	browserErr := openBrowser(authorizeURL)
-	if browserErr == nil {
-		if cb.OnBrowserOpen != nil {
-			cb.OnBrowserOpen(authorizeURL)
-		}
-		select {
-		case cbResult = <-resultCh:
-		case <-time.After(120 * time.Second):
-			return fmt.Errorf("auth: authorization timed out (120s)")
-		}
-	} else {
-		if cb.OnManualURL == nil {
-			return fmt.Errorf("auth: could not open browser and no manual URL handler provided: %w", browserErr)
-		}
-		pastedURL := cb.OnManualURL(authorizeURL)
-		parsed, err := url.Parse(pastedURL)
-		if err != nil {
-			return fmt.Errorf("auth: invalid pasted URL: %w", err)
-		}
-		cbResult.code = parsed.Query().Get("code")
-		cbResult.state = parsed.Query().Get("state")
+	if cb.OnPrompt != nil {
+		cb.OnPrompt(authorizeURL, browserOpened)
+	}
+
+	pasteCh := make(chan callbackResult, 1)
+	if cb.OnManualURL != nil {
+		go func() {
+			pasted := strings.TrimSpace(cb.OnManualURL(authorizeURL))
+			if pasted == "" {
+				return
+			}
+			parsed, err := url.Parse(pasted)
+			if err != nil {
+				return
+			}
+			pasteCh <- callbackResult{
+				code:  parsed.Query().Get("code"),
+				state: parsed.Query().Get("state"),
+			}
+		}()
+	}
+
+	var cbResult callbackResult
+	select {
+	case cbResult = <-resultCh:
+	case cbResult = <-pasteCh:
+	case <-time.After(loginTimeout):
+		return fmt.Errorf("auth: authorization timed out (%s)", loginTimeout)
 	}
 
 	if cbResult.code == "" {

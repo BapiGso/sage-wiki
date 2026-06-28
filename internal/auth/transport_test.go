@@ -54,6 +54,46 @@ func TestAuthTransportInjectsBearer(t *testing.T) {
 	}
 }
 
+func TestAuthTransportInjectsAnthropicBetaHeader(t *testing.T) {
+	var receivedHeaders http.Header
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedHeaders = r.Header.Clone()
+		w.WriteHeader(200)
+	}))
+	defer backend.Close()
+
+	dir := t.TempDir()
+	store := NewStore(filepath.Join(dir, "auth.json"))
+	store.Put("anthropic", &Credential{
+		AccessToken: "sk-ant-oat01-test",
+		ExpiresAt:   time.Now().Add(1 * time.Hour).Unix(),
+		Source:      "import",
+	})
+
+	transport := NewAuthTransport(http.DefaultTransport, store, "anthropic")
+	client := &http.Client{Transport: transport}
+
+	req, _ := http.NewRequest("GET", backend.URL+"/v1/messages", nil)
+	req.Header.Set("x-api-key", "should-be-stripped")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if got := receivedHeaders.Get("Authorization"); got != "Bearer sk-ant-oat01-test" {
+		t.Errorf("Authorization = %q, want %q", got, "Bearer sk-ant-oat01-test")
+	}
+	if got := receivedHeaders.Get("x-api-key"); got != "" {
+		t.Errorf("x-api-key should be stripped, got %q", got)
+	}
+	// Without this header /v1/messages rejects subscription OAuth tokens with 401.
+	if got := receivedHeaders.Get("anthropic-beta"); got != "oauth-2025-04-20" {
+		t.Errorf("anthropic-beta = %q, want %q", got, "oauth-2025-04-20")
+	}
+}
+
 func TestAuthTransportStripsGeminiKeyParam(t *testing.T) {
 	var receivedURL string
 
@@ -120,6 +160,45 @@ func TestAuthTransportClonesRequest(t *testing.T) {
 	// Original request should not be modified
 	if got := req.Header.Get("x-api-key"); got != "original-key" {
 		t.Errorf("original request was mutated: x-api-key = %q", got)
+	}
+}
+
+func TestAuthTransportUsesNoRefreshTokenCredAsIs(t *testing.T) {
+	// A directly-supplied token (e.g. CLAUDE_CODE_OAUTH_TOKEN) has no refresh
+	// token and ExpiresAt==0. The transport must use it as-is rather than
+	// attempting a doomed refresh. No token server is configured, so any refresh
+	// attempt would error — a successful request proves no refresh happened.
+	var receivedAuth, receivedBeta string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuth = r.Header.Get("Authorization")
+		receivedBeta = r.Header.Get("anthropic-beta")
+		w.WriteHeader(200)
+	}))
+	defer backend.Close()
+
+	dir := t.TempDir()
+	store := NewStore(filepath.Join(dir, "auth.json"))
+	store.Put("anthropic", &Credential{
+		AccessToken: "sk-ant-oat01-direct",
+		// RefreshToken empty, ExpiresAt 0 → "expiring" but not refreshable
+		Source: "import",
+	})
+
+	transport := NewAuthTransport(http.DefaultTransport, store, "anthropic")
+	client := &http.Client{Transport: transport}
+
+	req, _ := http.NewRequest("GET", backend.URL+"/v1/messages", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("request failed (transport attempted a doomed refresh?): %v", err)
+	}
+	resp.Body.Close()
+
+	if receivedAuth != "Bearer sk-ant-oat01-direct" {
+		t.Errorf("Authorization = %q, want the direct token used as-is", receivedAuth)
+	}
+	if receivedBeta != "oauth-2025-04-20" {
+		t.Errorf("anthropic-beta = %q, want oauth-2025-04-20", receivedBeta)
 	}
 }
 

@@ -28,7 +28,11 @@ func NewAuthTransport(base http.RoundTripper, store *Store, provider string) htt
 
 func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	cred := t.cachedCred()
-	if cred == nil || cred.ExpiresWithin(5*time.Minute) {
+	// Only attempt a refresh when a refresh token actually exists. A credential
+	// supplied directly (e.g. via CLAUDE_CODE_OAUTH_TOKEN) has no refresh token
+	// and no managed expiry — use it as-is and let the provider return 401 if it
+	// has genuinely expired, rather than failing with a "no refresh token" error.
+	if cred == nil || (cred.ExpiresWithin(5*time.Minute) && cred.RefreshToken != "") {
 		var err error
 		cred, err = t.refreshCred()
 		if err != nil {

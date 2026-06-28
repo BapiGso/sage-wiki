@@ -294,6 +294,15 @@ compiler:
   # article_fields:           # 从 LLM 响应中提取的自定义 frontmatter 字段
   #   - language
   #   - domain
+  # quality:                  # 零 LLM 文章质量评分器 (仅提示,不拦截)
+  #   threshold: 0.5          # 文章综合得分低于此值时发出警告
+  #   weight_format: 0.15     # 5 个维度: format / grounding / coverage / wikilink / antipattern
+  #   weight_grounding: 0.30
+  #   weight_coverage: 0.20
+  #   weight_wikilink: 0.15
+  #   weight_antipattern: 0.20
+  # anti_pattern_phrases:     # 从生成文章中剔除的套话句子
+  #   - "in conclusion"       # 省略该键使用双语默认列表; [] 禁用剔除
 
   # 分层编译 -- 快速索引,按需编译
   default_tier: 3 # 0=索引, 1=索引+向量, 3=完整编译

@@ -317,6 +317,15 @@ compiler:
   # article_fields:           # trường frontmatter tùy chỉnh được trích xuất từ phản hồi LLM
   #   - language
   #   - domain
+  # quality:                  # bộ chấm điểm chất lượng bài viết không cần LLM (chỉ cảnh báo, không chặn)
+  #   threshold: 0.5          # cảnh báo khi điểm tổng hợp của bài viết thấp hơn giá trị này
+  #   weight_format: 0.15     # 5 chiều: format / grounding / coverage / wikilink / antipattern
+  #   weight_grounding: 0.30
+  #   weight_coverage: 0.20
+  #   weight_wikilink: 0.15
+  #   weight_antipattern: 0.20
+  # anti_pattern_phrases:     # câu sáo rỗng bị loại khỏi bài viết được tạo ra
+  #   - "in conclusion"       # bỏ qua khóa này để dùng danh sách mặc định song ngữ; [] tắt việc loại bỏ
 
   # Biên dịch phân tầng — lập chỉ mục nhanh, biên dịch những gì quan trọng
   default_tier: 3 # 0=chỉ mục, 1=chỉ mục+embed, 3=biên dịch đầy đủ

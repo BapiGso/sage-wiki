@@ -198,7 +198,17 @@ func TestExtractAccountIDInvalidJWT(t *testing.T) {
 	}
 }
 
+// stubNoBrowser forces openBrowserFn to report "no browser" so login tests
+// take a deterministic path and never spawn a real browser.
+func stubNoBrowser(t *testing.T) {
+	t.Helper()
+	orig := openBrowserFn
+	openBrowserFn = func(string) error { return fmt.Errorf("stub: no browser in tests") }
+	t.Cleanup(func() { openBrowserFn = orig })
+}
+
 func TestLoginPKCEFullFlow(t *testing.T) {
+	stubNoBrowser(t)
 	// Mock token endpoint
 	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.ParseForm()
@@ -259,7 +269,126 @@ func TestLoginPKCEFullFlow(t *testing.T) {
 	}
 }
 
+// TestLoginPKCEPromptShowsURL pins the "always display the link" behavior: the
+// authorize URL is surfaced via OnPrompt regardless of whether a browser
+// opened, and a pasted redirect URL completes the flow.
+func TestLoginPKCEPromptShowsURL(t *testing.T) {
+	stubNoBrowser(t)
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"access_token": "at-prompt", "refresh_token": "rt-prompt", "expires_in": 3600,
+		})
+	}))
+	defer tokenServer.Close()
+
+	origCfg := Providers["openai"]
+	Providers["openai"] = ProviderConfig{
+		AuthorizeURL: origCfg.AuthorizeURL,
+		TokenURL:     tokenServer.URL,
+		ClientID:     origCfg.ClientID,
+		RedirectPath: "/auth/callback",
+		Scopes:       origCfg.Scopes,
+		FlowType:     FlowPKCE,
+	}
+	defer func() { Providers["openai"] = origCfg }()
+
+	dir := t.TempDir()
+	store := NewStore(dir + "/auth.json")
+
+	var promptCalled bool
+	var promptedURL string
+	err := LoginPKCE("openai", store, LoginCallbacks{
+		OnPrompt: func(authorizeURL string, browserOpened bool) {
+			promptCalled = true
+			promptedURL = authorizeURL
+		},
+		OnManualURL: func(authorizeURL string) string {
+			u, _ := url.Parse(authorizeURL)
+			state := u.Query().Get("state")
+			return fmt.Sprintf("http://localhost:9999/auth/callback?code=manual-code&state=%s", state)
+		},
+	})
+	if err != nil {
+		t.Fatalf("LoginPKCE: %v", err)
+	}
+	if !promptCalled {
+		t.Error("OnPrompt was not called — the auth URL must always be shown")
+	}
+	if u, perr := url.Parse(promptedURL); perr != nil || u.Query().Get("code_challenge") == "" {
+		t.Errorf("authorize URL malformed or empty: %q", promptedURL)
+	}
+}
+
+// TestLoginPKCECallbackServerPath exercises the desktop branch: the local
+// callback server (not a pasted URL) completes the flow. OnPrompt simulates the
+// browser redirect by extracting the real redirect_uri/state from the authorize
+// URL and hitting the callback server.
+func TestLoginPKCECallbackServerPath(t *testing.T) {
+	stubNoBrowser(t)
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"access_token": "at-server", "refresh_token": "rt-server", "expires_in": 3600,
+		})
+	}))
+	defer tokenServer.Close()
+
+	origCfg := Providers["openai"]
+	Providers["openai"] = ProviderConfig{
+		AuthorizeURL: origCfg.AuthorizeURL,
+		TokenURL:     tokenServer.URL,
+		ClientID:     origCfg.ClientID,
+		RedirectPort: 0, // random port chosen by the callback server
+		RedirectPath: "/auth/callback",
+		Scopes:       origCfg.Scopes,
+		FlowType:     FlowPKCE,
+	}
+	defer func() { Providers["openai"] = origCfg }()
+
+	dir := t.TempDir()
+	store := NewStore(dir + "/auth.json")
+
+	// No OnManualURL: only the local callback server can complete the flow.
+	done := make(chan error, 1)
+	go func() {
+		done <- LoginPKCE("openai", store, LoginCallbacks{
+			OnPrompt: func(authorizeURL string, browserOpened bool) {
+				u, err := url.Parse(authorizeURL)
+				if err != nil {
+					t.Errorf("parse authorize URL: %v", err)
+					return
+				}
+				redirect := u.Query().Get("redirect_uri")
+				state := u.Query().Get("state")
+				resp, err := http.Get(fmt.Sprintf("%s?code=server-code&state=%s", redirect, state))
+				if err != nil {
+					t.Errorf("callback GET: %v", err)
+					return
+				}
+				resp.Body.Close()
+			},
+		})
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("LoginPKCE via callback server: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for LoginPKCE to complete via callback server")
+	}
+
+	cred, err := store.Get("openai")
+	if err != nil {
+		t.Fatalf("Get after login: %v", err)
+	}
+	if cred.AccessToken != "at-server" {
+		t.Errorf("AccessToken = %q, want at-server", cred.AccessToken)
+	}
+}
+
 func TestLoginPKCEStateMismatch(t *testing.T) {
+	stubNoBrowser(t)
 	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"access_token": "tok", "refresh_token": "rt", "expires_in": 3600,

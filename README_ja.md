@@ -317,6 +317,15 @@ compiler:
   # article_fields:           # LLMレスポンスから抽出されるカスタムフロントマターフィールド
   #   - language
   #   - domain
+  # quality:                  # LLM不要の記事品質スコアラー（助言用、ゲートなし）
+  #   threshold: 0.5          # 記事の総合スコアがこの値を下回ると警告
+  #   weight_format: 0.15     # 5次元: format / grounding / coverage / wikilink / antipattern
+  #   weight_grounding: 0.30
+  #   weight_coverage: 0.20
+  #   weight_wikilink: 0.15
+  #   weight_antipattern: 0.20
+  # anti_pattern_phrases:     # 生成された記事から除去される定型句
+  #   - "in conclusion"       # キーを省略すると二言語のデフォルトリスト; [] で除去を無効化
 
   # ティアードコンパイル — 高速インデックス、重要なものだけコンパイル
   default_tier: 3 # 0=インデックスのみ, 1=インデックス+エンベッド, 3=フルコンパイル

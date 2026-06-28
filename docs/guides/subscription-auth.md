@@ -59,28 +59,57 @@ sage-wiki auth login --provider <name>
 
 Where `<name>` is one of: `openai`, `anthropic`.
 
-This opens your default browser to the provider's login page. sage-wiki
-uses PKCE OAuth -- no client secret is stored, and tokens never pass
-through a third-party server.
+sage-wiki uses PKCE OAuth -- no client secret is stored, and tokens never
+pass through a third-party server. It **always prints the authorization
+URL**, attempts to open it in your default browser, and then waits for the
+authorization to complete by **either** path below -- whichever happens
+first (up to 5 minutes):
 
-After you log in and authorize, the browser redirects to a local callback
-(`http://localhost:...`) and sage-wiki stores the tokens.
+- **Local browser (desktop).** After you authorize, the browser redirects
+  to a local callback (`http://localhost:<port>/callback`) that sage-wiki is
+  listening on, and the tokens are stored automatically. The port is fixed
+  per provider: **Anthropic `53692`**, **OpenAI `1455`** (it is shown in the
+  `redirect_uri` of the printed URL).
+- **Pasted redirect URL (headless/remote).** Copy the printed URL, open it
+  in a browser on any machine, authorize, then paste the full redirect URL
+  back into the terminal (see below).
 
-### Headless Environments (SSH, WSL, Containers)
+### Headless Environments (SSH, WSL, Containers, VPS)
 
-If no browser is available, sage-wiki prints a URL and a one-time code:
+On a remote/headless box the browser runs on a *different* machine, so the
+`http://localhost:<port>/callback` redirect lands on **your local machine**,
+not the server -- the callback server on the remote box can never receive
+it. Use the paste flow:
 
+1. Run `sage-wiki auth login --provider <name>`. sage-wiki prints the
+   authorization URL. (It also tries to launch a browser; on a headless box
+   that does nothing useful, which is why the URL is always printed.)
+2. Copy that URL and open it in a browser on any device.
+3. Authorize. Your browser is redirected to
+   `http://localhost:<port>/callback?code=...&state=...`. The page fails to
+   load -- nothing is listening on *your* localhost -- which is expected.
+4. Copy the **full redirect URL** from the browser's address bar (it still
+   shows `?code=...&state=...` on the error page) and paste it at the prompt:
+
+   ```
+   paste it here (or just wait if the browser is on this machine):
+   ```
+
+5. sage-wiki exchanges the code and stores the tokens.
+
+**Alternative -- SSH tunnel.** Because the callback port is fixed per
+provider (Anthropic `53692`, OpenAI `1455`), you can forward it and let the
+automatic flow complete instead of pasting:
+
+```bash
+# Anthropic (use 1455 for OpenAI)
+ssh -L 53692:localhost:53692 user@your-server
+# then run `sage-wiki auth login` on the server and authorize in your
+# local browser -- the redirect reaches the server through the tunnel
 ```
-No browser detected. Open this URL on any device:
-  https://auth.openai.com/device?user_code=ABCD-1234
 
-Enter the code: ABCD-1234
-
-Waiting for authorization...
-```
-
-Log in on any device with a browser, enter the code, and sage-wiki
-picks up the token automatically.
+On a server, **importing** credentials from an already-authenticated CLI
+tool (see below) is often simpler than the login flow.
 
 ## Import from Existing CLI Tools
 
@@ -100,6 +129,13 @@ sage-wiki auth import --provider <name>
 | GitHub Copilot | `~/.copilot/settings.json` | `$COPILOT_HOME` |
 | Gemini CLI | `~/.gemini/oauth_creds.json` | -- |
 
+> **Claude Code (Anthropic).** sage-wiki reads Claude Code's
+> `~/.claude/.credentials.json` directly, including its current format
+> (OAuth tokens nested under `claudeAiOauth` with a millisecond `expiresAt`)
+> as well as the older flat shape. Once imported, sage-wiki automatically
+> sends the `anthropic-beta: oauth-2025-04-20` header that the Messages API
+> requires for subscription tokens -- there is nothing extra to configure.
+
 ### macOS Note for Claude Code
 
 On macOS, Claude Code stores credentials in the system Keychain rather
@@ -111,6 +147,12 @@ token via environment variable instead:
 export CLAUDE_CODE_OAUTH_TOKEN="your-token-here"
 sage-wiki auth import --provider anthropic
 ```
+
+When set, `CLAUDE_CODE_OAUTH_TOKEN` takes precedence over the credentials
+file. The token is used as-is -- it has no refresh token, so sage-wiki cannot
+auto-refresh it. When it expires you'll see a `401`; re-export a fresh token
+and import again. (`auth status` shows it as `valid (no expiry)` since the
+expiry isn't known.)
 
 ### Import Examples
 

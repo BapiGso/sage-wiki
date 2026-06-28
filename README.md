@@ -315,6 +315,15 @@ compiler:
   # batch_threshold: 10       # min sources for auto-batch mode
   # token_price_per_million: 0  # override pricing (0 = use built-in)
   # timezone: Asia/Shanghai   # IANA timezone for user-facing timestamps (default: UTC)
+  # quality:                  # zero-LLM article quality scorer (advisory, no gate)
+  #   threshold: 0.5          # warn when an article's composite score is below this
+  #   weight_format: 0.15     # 5 dimensions: format / grounding / coverage / wikilink / antipattern
+  #   weight_grounding: 0.30
+  #   weight_coverage: 0.20
+  #   weight_wikilink: 0.15
+  #   weight_antipattern: 0.20
+  # anti_pattern_phrases:     # filler sentences stripped from generated articles
+  #   - "in conclusion"       # omit the key for the bilingual default list; [] disables stripping
   # article_fields:           # custom frontmatter fields extracted from LLM response
   #   - language
   #   - domain

@@ -317,6 +317,15 @@ compiler:
   # article_fields:           # LLM 응답에서 추출되는 커스텀 프론트매터 필드
   #   - language
   #   - domain
+  # quality:                  # LLM 없는 문서 품질 점수기 (권고용, 차단 없음)
+  #   threshold: 0.5          # 문서의 종합 점수가 이 값보다 낮으면 경고
+  #   weight_format: 0.15     # 5개 차원: format / grounding / coverage / wikilink / antipattern
+  #   weight_grounding: 0.30
+  #   weight_coverage: 0.20
+  #   weight_wikilink: 0.15
+  #   weight_antipattern: 0.20
+  # anti_pattern_phrases:     # 생성된 문서에서 제거되는 군더더기 문장
+  #   - "in conclusion"       # 키를 생략하면 이중 언어 기본 목록; []는 제거 비활성화
 
   # 계층화된 컴파일 — 빠르게 인덱싱하고, 중요한 것만 컴파일
   default_tier: 3 # 0=인덱스, 1=인덱스+임베드, 3=전체 컴파일

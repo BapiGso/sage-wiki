@@ -1,5 +1,36 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Article quality scorer (#97).** Zero-LLM, 5-dimension article quality score (Format, Grounding, Coverage, Wikilink, AntiPattern) computed at compile time. Weights and threshold are configurable under `compiler.quality`; below-threshold articles are surfaced in a compile-end summary and via the linter (no gate — advisory only).
+- **Article post-processing pass (#95).** Compile-time cleanup of generated articles: strips a stray whole-body code fence, removes bilingual anti-pattern/filler sentences (configurable via `compiler.anti_pattern_phrases`), and sanitizes wikilinks to canonical slugs.
+- **Richer empty-content errors (#85).** LLM failures now surface `finish_reason` and any reasoning text in the error, instead of a bare "empty content" message.
+
+### Changed
+
+- **Headless OAuth login now always shows the link.** `auth login` always prints the authorization URL and accepts a pasted redirect URL concurrently with the local callback server — so login works on a VPS/SSH/WSL box where the browser runs on another machine. Previously, when a launcher like `xdg-open` "succeeded" with no real browser, the command printed no link and hung. Auth wait extended to 5 minutes.
+- **Bundled pack prompts migrated from `.txt` to `.md`.**
+- **READMEs now include a guides table of contents** across all language editions.
+
+### Fixed
+
+- **Anthropic subscription auth now works end-to-end.** `auth import --provider anthropic` reads Claude Code's real credentials format (tokens nested under `claudeAiOauth`, numeric millisecond `expiresAt`) — it previously failed with "imported credentials have no access token." Anthropic OAuth tokens are now sent with the required `anthropic-beta: oauth-2025-04-20` header so the Messages API (`/v1/messages`) accepts them (Bearer alone returned 401). The legacy flat credential shape is still supported.
+- **`CLAUDE_CODE_OAUTH_TOKEN` import now works (macOS Keychain).** The documented env-var override for importing Claude Code credentials was never implemented; `auth import --provider anthropic` now uses it when set (taking precedence over the file). A directly-supplied token has no refresh token, so the auth transport uses it as-is instead of attempting a doomed refresh, and `auth status` reports it as `valid (no expiry)` rather than `expired`.
+- **`wiki_search` result content is capped (#104)** to prevent overflowing the calling agent's context.
+- **`wiki_compile_diff` scans the filesystem** instead of only the manifest (#51).
+- **`wiki_add_source` accepts paths inside configured source directories (#51).**
+- **Unique summary filenames per source path (#51)** — sources with the same basename no longer collide.
+- **`StripBrokenWikilinks` runs after `ReExtract`** as well (#94).
+- **Phantom wikilinks stripped; empty `connections/` directory no longer scaffolded (#90, #91).**
+- **Batch `custom_id` uses a short hash** to fit Zhipu GLM's 64-char limit (#89).
+- **Pass flags are sticky in `Upsert`** so an interrupted compile can resume (#88).
+- **Whitespace-only input is skipped before embedding** to avoid a 400 (bge-m3 code 20015) (#87).
+- **`BatchProvider` interface hidden from OpenAI-compatible providers (#83).**
+- **Graceful recovery after `.sage/` deletion (#84).**
+- **`sources[].type` propagates to per-file detection; `entity_type` emitted in frontmatter (#79, #80).**
+
 ## 0.1.9 — 2026-05-10
 
 ### Contribution Packs

@@ -317,6 +317,15 @@ compiler:
   # article_fields:           # пользовательские поля frontmatter, извлекаемые из ответа LLM
   #   - language
   #   - domain
+  # quality:                  # оценщик качества статей без LLM (рекомендательный, без блокировки)
+  #   threshold: 0.5          # предупреждать, когда совокупная оценка статьи ниже этого значения
+  #   weight_format: 0.15     # 5 измерений: format / grounding / coverage / wikilink / antipattern
+  #   weight_grounding: 0.30
+  #   weight_coverage: 0.20
+  #   weight_wikilink: 0.15
+  #   weight_antipattern: 0.20
+  # anti_pattern_phrases:     # шаблонные фразы, удаляемые из сгенерированных статей
+  #   - "in conclusion"       # опустите ключ для двуязычного списка по умолчанию; [] отключает удаление
 
   # Многоуровневая компиляция — быстрая индексация, компиляция важного
   default_tier: 3 # 0=индекс, 1=индекс+эмбеддинг, 3=полная компиляция

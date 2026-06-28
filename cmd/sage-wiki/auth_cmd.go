@@ -86,20 +86,13 @@ func runAuthStatus(cmd *cobra.Command, args []string) error {
 	fmt.Println("Stored credentials:")
 	fmt.Println()
 	for name, cred := range creds {
-		status := "valid"
-		if cred.ExpiresWithin(0) {
-			status = "expired"
-		} else if cred.ExpiresWithin(5 * time.Minute) {
-			status = "expiring soon"
-		}
-
 		expiry := time.Unix(cred.ExpiresAt, 0).Format(time.RFC3339)
 		if cred.ExpiresAt == 0 {
 			expiry = "unknown"
 		}
 
-		fmt.Printf("  %-16s  token: %s  source: %-6s  status: %-13s  expires: %s\n",
-			name, cred.String(), cred.Source, status, expiry)
+		fmt.Printf("  %-16s  token: %s  source: %-6s  status: %-17s  expires: %s\n",
+			name, cred.String(), cred.Source, cred.Status(), expiry)
 	}
 
 	return nil
@@ -146,13 +139,18 @@ func runAuthLogin(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Logging in to %s...\n", name)
 
 	err = auth.LoginPKCE(name, store, auth.LoginCallbacks{
-		OnBrowserOpen: func(url string) {
-			fmt.Println("Browser opened. Complete authorization in your browser.")
+		OnPrompt: func(authorizeURL string, browserOpened bool) {
+			if browserOpened {
+				fmt.Println("\nOpening your browser to authorize...")
+			}
+			fmt.Println("\nIf no browser opened (e.g. on a remote/headless server), open this URL manually:")
+			fmt.Println("\n  " + authorizeURL)
+			fmt.Println("\nAfter you authorize, the browser is redirected to a localhost URL.")
+			fmt.Println("On this machine that completes login automatically. On a headless server")
+			fmt.Println("the page won't load — copy the FULL redirect URL from the address bar and")
+			fmt.Print("paste it here (or just wait if the browser is on this machine): ")
 		},
 		OnManualURL: func(authorizeURL string) string {
-			fmt.Println("\nCould not open browser. Open this URL manually:")
-			fmt.Println(authorizeURL)
-			fmt.Print("\nPaste the redirect URL here: ")
 			scanner := bufio.NewScanner(os.Stdin)
 			if scanner.Scan() {
 				return strings.TrimSpace(scanner.Text())
@@ -162,7 +160,7 @@ func runAuthLogin(cmd *cobra.Command, args []string) error {
 		OnSuccess: func(provider string) {
 			cred, _ := store.Get(provider)
 			if cred != nil {
-				fmt.Printf("Logged in to %s. Token: %s\n", provider, cred.String())
+				fmt.Printf("\nLogged in to %s. Token: %s\n", provider, cred.String())
 			}
 		},
 	})

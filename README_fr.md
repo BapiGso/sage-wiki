@@ -319,6 +319,15 @@ compiler:
   # article_fields:           # champs frontmatter personnalisés extraits de la réponse LLM
   #   - language
   #   - domain
+  # quality:                  # évaluateur de qualité d'article sans LLM (indicatif, sans blocage)
+  #   threshold: 0.5          # avertir quand le score composite d'un article est inférieur à cette valeur
+  #   weight_format: 0.15     # 5 dimensions : format / grounding / coverage / wikilink / antipattern
+  #   weight_grounding: 0.30
+  #   weight_coverage: 0.20
+  #   weight_wikilink: 0.15
+  #   weight_antipattern: 0.20
+  # anti_pattern_phrases:     # phrases de remplissage retirées des articles générés
+  #   - "in conclusion"       # omettre la clé pour la liste par défaut bilingue ; [] désactive le retrait
 
   # Compilation par paliers — indexer rapidement, compiler ce qui compte
   default_tier: 3 # 0=indexer, 1=indexer+embedder, 3=compilation complète

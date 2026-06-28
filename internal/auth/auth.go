@@ -26,9 +26,34 @@ func (c *Credential) ExpiresWithin(d time.Duration) bool {
 	return time.Until(time.Unix(c.ExpiresAt, 0)) < d
 }
 
+// Status reports a human-readable validity state for display. A credential with
+// no expiry (ExpiresAt == 0, e.g. a directly-supplied token) is reported as
+// valid rather than expired — the ExpiresAt == 0 case is checked first.
+func (c *Credential) Status() string {
+	if c.ExpiresAt == 0 {
+		return "valid (no expiry)"
+	}
+	if c.ExpiresWithin(0) {
+		return "expired"
+	}
+	if c.ExpiresWithin(5 * time.Minute) {
+		return "expiring soon"
+	}
+	return "valid"
+}
+
 func (c *Credential) ExtraHeaders() map[string]string {
-	if c.Provider == "openai" && c.AccountID != "" {
-		return map[string]string{"ChatGPT-Account-ID": c.AccountID}
+	switch c.Provider {
+	case "openai":
+		if c.AccountID != "" {
+			return map[string]string{"ChatGPT-Account-ID": c.AccountID}
+		}
+	case "anthropic":
+		// Claude subscription OAuth tokens (sk-ant-oat01-*) are only accepted by
+		// the Messages API (/v1/messages) when this beta header is present —
+		// Bearer auth alone returns 401. ExtraHeaders is applied solely by the
+		// subscription auth transport, so this never affects x-api-key requests.
+		return map[string]string{"anthropic-beta": "oauth-2025-04-20"}
 	}
 	return nil
 }

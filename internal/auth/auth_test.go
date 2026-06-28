@@ -98,12 +98,42 @@ func TestCredentialExtraHeaders(t *testing.T) {
 		}
 	})
 
-	t.Run("anthropic returns nil", func(t *testing.T) {
+	t.Run("anthropic injects oauth beta header", func(t *testing.T) {
 		cred := Credential{Provider: "anthropic"}
+		headers := cred.ExtraHeaders()
+		if headers["anthropic-beta"] != "oauth-2025-04-20" {
+			t.Errorf("anthropic-beta = %q, want %q", headers["anthropic-beta"], "oauth-2025-04-20")
+		}
+	})
+
+	t.Run("gemini returns nil", func(t *testing.T) {
+		cred := Credential{Provider: "gemini"}
 		if headers := cred.ExtraHeaders(); headers != nil {
 			t.Errorf("expected nil headers, got %v", headers)
 		}
 	})
+}
+
+func TestCredentialStatus(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		name      string
+		expiresAt int64
+		want      string
+	}{
+		{"no expiry", 0, "valid (no expiry)"},
+		{"expired", now.Add(-1 * time.Hour).Unix(), "expired"},
+		{"expiring soon", now.Add(2 * time.Minute).Unix(), "expiring soon"},
+		{"valid", now.Add(2 * time.Hour).Unix(), "valid"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Credential{ExpiresAt: tc.expiresAt}
+			if got := c.Status(); got != tc.want {
+				t.Errorf("Status() = %q, want %q", got, tc.want)
+			}
+		})
+	}
 }
 
 func TestResolveProviderName(t *testing.T) {

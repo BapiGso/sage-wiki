@@ -18,6 +18,18 @@ func ImportFromCLI(providerName string, store *Store) error {
 		return fmt.Errorf("auth: provider %q does not support import", providerName)
 	}
 
+	// Claude Code stores credentials in the macOS Keychain (no flat file), so
+	// users export the access token via CLAUDE_CODE_OAUTH_TOKEN. When set, use
+	// it directly and skip the file. The token has no refresh token or known
+	// expiry: the auth transport uses it as-is (it does not attempt a refresh
+	// without a refresh token) until the provider rejects it, at which point the
+	// user re-exports a fresh token.
+	if providerName == "anthropic" {
+		if tok := strings.TrimSpace(os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")); tok != "" {
+			return store.Put(providerName, &Credential{AccessToken: tok, Source: "import"})
+		}
+	}
+
 	importPath := expandPath(cfg.ImportPath, providerName)
 
 	data, err := os.ReadFile(importPath)
@@ -87,25 +99,60 @@ func parseCodexAuth(data []byte) (*Credential, error) {
 }
 
 func parseClaudeAuth(data []byte) (*Credential, error) {
+	// Claude Code nests OAuth credentials under "claudeAiOauth" and stores
+	// expiresAt as a numeric millisecond epoch. Older/other shapes may store
+	// the fields flat at the top level with an RFC3339 expiresAt string.
+	// Support both; prefer the nested shape when it carries a token.
 	var f struct {
-		AccessToken  string `json:"accessToken"`
-		RefreshToken string `json:"refreshToken"`
-		ExpiresAt    string `json:"expiresAt"`
+		ClaudeAiOauth *struct {
+			AccessToken  string          `json:"accessToken"`
+			RefreshToken string          `json:"refreshToken"`
+			ExpiresAt    json.RawMessage `json:"expiresAt"`
+		} `json:"claudeAiOauth"`
+		AccessToken  string          `json:"accessToken"`
+		RefreshToken string          `json:"refreshToken"`
+		ExpiresAt    json.RawMessage `json:"expiresAt"`
 	}
 	if err := json.Unmarshal(data, &f); err != nil {
 		return nil, fmt.Errorf("auth: parse claude .credentials.json: %w", err)
 	}
-	var expiresAt int64
-	if f.ExpiresAt != "" {
-		if t, err := time.Parse(time.RFC3339, f.ExpiresAt); err == nil {
-			expiresAt = t.Unix()
+
+	accessToken, refreshToken, rawExpiry := f.AccessToken, f.RefreshToken, f.ExpiresAt
+	if f.ClaudeAiOauth != nil && f.ClaudeAiOauth.AccessToken != "" {
+		accessToken = f.ClaudeAiOauth.AccessToken
+		refreshToken = f.ClaudeAiOauth.RefreshToken
+		rawExpiry = f.ClaudeAiOauth.ExpiresAt
+	}
+
+	return &Credential{
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+		ExpiresAt:    parseClaudeExpiry(rawExpiry),
+	}, nil
+}
+
+// parseClaudeExpiry accepts either a numeric millisecond epoch (current Claude
+// Code format) or an RFC3339 string (legacy), returning Unix seconds (0 if
+// absent or unparseable). A quoted RFC3339 string is not a valid JSON number,
+// so the numeric unmarshal fails cleanly and we fall through to time.Parse.
+func parseClaudeExpiry(raw json.RawMessage) int64 {
+	if len(raw) == 0 {
+		return 0
+	}
+	var ms int64
+	if err := json.Unmarshal(raw, &ms); err == nil {
+		if ms > 0 {
+			return ms / 1000 // ms → seconds
+		}
+		return 0
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil && s != "" {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			return t.Unix()
 		}
 	}
-	return &Credential{
-		AccessToken:  f.AccessToken,
-		RefreshToken: f.RefreshToken,
-		ExpiresAt:    expiresAt,
-	}, nil
+	return 0
 }
 
 func parseCopilotAuth(data []byte) (*Credential, error) {
