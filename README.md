@@ -127,7 +127,26 @@ Available tags: `:latest` (main branch), `:v1.0.0` (releases), `:sha-abc1234` (s
 
 See the [self-hosting guide](docs/guides/self-hosted-server.md) for Docker Compose, Syncthing sync, reverse proxy, and LLM provider setup.
 
+## Go library
+
+This fork exposes a small in-process API from `pkg/sagewiki` for Go applications
+that need to embed sage-wiki without starting the MCP or HTTP server:
+
+```go
+import "github.com/xoai/sage-wiki/pkg/sagewiki"
+
+results, err := sagewiki.Search(projectDir, sagewiki.SearchOptions{
+    Query: "attention mechanism",
+    Limit: 5,
+})
+```
+
+The package also exposes `InitGreenfield`, `InitVaultOverlay`, `Status`,
+`Query`, `Ingest`, and `Compile`. Consumers of this fork should keep the
+upstream module path and select the fork with a Go module `replace` directive.
+
 ## Commands
+
 
 | Command                                                                                 | Description                                      |
 | --------------------------------------------------------------------------------------- | ------------------------------------------------ |
